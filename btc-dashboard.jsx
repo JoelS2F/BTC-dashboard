@@ -672,11 +672,14 @@ function DerivativesTab({ data }) {
 }
 
 
-// ─── TAB: V2 STRATEGY (Fear & Greed) ──────────────────────────────────────────
+// ─── TAB: V2 STRATEGY (Fear & Greed — V4 Backtested) ─────────────────────────
+// V4 strategy (best Sharpe 0.666): Raw F&G < 15 entry, exit when F&G > 50
+// Backtested 2018-2026: 11 trades, 63.6% win rate, +124.8% total, +11.4% avg
 function computeV2Signal(data) {
   var fng = data.fng;
+  var fngRaw = fng && fng.current ? fng.current.value : 50;
   var fngSMA14 = fng && fng.current ? fng.current.sma14 : 50;
-  var fngScore = clamp(100 - fngSMA14, 0, 100); // invert: fear = bullish
+  var fngScore = clamp(100 - fngRaw, 0, 100); // invert raw: fear = bullish
 
   var price = data.currentPrice || 0;
   var maxPain = data.maxPainCurrent || price;
@@ -691,21 +694,24 @@ function computeV2Signal(data) {
 
   var composite = fngScore * 0.50 + mpDistScore * 0.25 + momScore * 0.25;
 
+  // V4 signal: Raw F&G based (backtested thresholds)
+  var inPosition = fngRaw < 15; // entry zone
+  var exitZone = fngRaw > 50;   // exit zone
   var direction = 'HOLD';
   var dirColor = COLORS.amber;
-  if (fngSMA14 <= 24) { direction = 'STRONG BUY'; dirColor = COLORS.green; }
-  else if (fngSMA14 <= 44) { direction = 'BUY'; dirColor = COLORS.greenLight; }
-  else if (fngSMA14 >= 76) { direction = 'STRONG SELL'; dirColor = COLORS.red; }
-  else if (fngSMA14 >= 56) { direction = 'SELL'; dirColor = COLORS.redLight; }
+  if (fngRaw < 15) { direction = 'STRONG BUY'; dirColor = COLORS.green; }
+  else if (fngRaw < 25) { direction = 'BUY'; dirColor = COLORS.greenLight; }
+  else if (fngRaw > 75) { direction = 'STRONG SELL'; dirColor = COLORS.red; }
+  else if (fngRaw > 50) { direction = 'EXIT / TAKE PROFIT'; dirColor = COLORS.redLight; }
 
-  return { fngScore, mpDistScore, momScore, composite, direction, dirColor, fngSMA14 };
+  return { fngScore, mpDistScore, momScore, composite, direction, dirColor, fngRaw, fngSMA14, inPosition, exitZone };
 }
 
 function V2StrategyTab({ data, allocation }) {
   var fng = data.fng;
   var v2 = computeV2Signal(data);
 
-  // Build chart data: merge FNG history with price history
+  // Build chart data
   var chartData = [];
   if (fng && fng.history) {
     var priceMap = {};
@@ -715,29 +721,29 @@ function V2StrategyTab({ data, allocation }) {
     });
   }
 
-  // Find zone crossings (SMA14 crossing below 25 or above 75)
-  var crossings = [];
-  if (fng && fng.history.length > 1) {
-    var priceMap2 = {};
-    if (data.priceHistory) data.priceHistory.forEach(function (p) { priceMap2[p.date] = p.price; });
-    for (var i = 1; i < fng.history.length; i++) {
-      var prev = fng.history[i - 1].sma14;
-      var curr = fng.history[i].sma14;
-      if (prev >= 25 && curr < 25) crossings.push({ date: fng.history[i].date, type: 'EXTREME FEAR ENTRY', sma: curr, price: priceMap2[fng.history[i].date] || null });
-      if (prev < 25 && curr >= 25) crossings.push({ date: fng.history[i].date, type: 'EXTREME FEAR EXIT', sma: curr, price: priceMap2[fng.history[i].date] || null });
-      if (prev <= 75 && curr > 75) crossings.push({ date: fng.history[i].date, type: 'EXTREME GREED ENTRY', sma: curr, price: priceMap2[fng.history[i].date] || null });
-      if (prev > 75 && curr <= 75) crossings.push({ date: fng.history[i].date, type: 'EXTREME GREED EXIT', sma: curr, price: priceMap2[fng.history[i].date] || null });
-    }
-  }
-
-  // FNG zone color helper
   function fngZoneColor(v) {
-    if (v <= 24) return COLORS.red;
+    if (v <= 14) return COLORS.red;
+    if (v <= 24) return COLORS.redLight;
     if (v <= 44) return COLORS.amber;
     if (v <= 55) return COLORS.textSecondary;
     if (v <= 75) return COLORS.green;
     return COLORS.blue;
   }
+
+  // Backtest results (hardcoded from btc_fng_backtest.py V4 results — 2018-2026)
+  var backtestTrades = [
+    { entry: '2018-02-05', exit: '2018-02-10', entryPx: 6937, exitPx: 8569, ret: 23.5, days: 5 },
+    { entry: '2018-03-30', exit: '2018-04-25', entryPx: 6854, exitPx: 8874, ret: 29.5, days: 26 },
+    { entry: '2018-09-06', exit: '2018-11-08', entryPx: 6515, exitPx: 6446, ret: -1.1, days: 63 },
+    { entry: '2018-11-22', exit: '2019-02-18', entryPx: 4321, exitPx: 3913, ret: -9.4, days: 88 },
+    { entry: '2019-08-14', exit: '2019-10-26', entryPx: 10032, exitPx: 9259, ret: -7.7, days: 73 },
+    { entry: '2020-03-12', exit: '2020-05-08', entryPx: 4917, exitPx: 9808, ret: 99.5, days: 57 },
+    { entry: '2021-05-20', exit: '2021-07-30', entryPx: 40597, exitPx: 42232, ret: 4.0, days: 71 },
+    { entry: '2022-01-08', exit: '2022-02-09', entryPx: 41687, exitPx: 44423, ret: 6.6, days: 32 },
+    { entry: '2022-05-09', exit: '2023-01-15', entryPx: 30077, exitPx: 20879, ret: -30.6, days: 251 },
+    { entry: '2025-02-27', exit: '2025-04-23', entryPx: 84657, exitPx: 93729, ret: 10.7, days: 55 },
+    { entry: '2025-11-15', exit: '2026-01-15', entryPx: 95555, exitPx: 95584, ret: 0.0, days: 61 },
+  ];
 
   if (!fng) return (
     <div style={{ color: COLORS.textMuted, padding: 40, textAlign: 'center' }}>
@@ -751,7 +757,7 @@ function V2StrategyTab({ data, allocation }) {
       {/* V2 Signal Banner */}
       <div style={{ background: v2.dirColor + '18', border: '1px solid ' + v2.dirColor + '44', borderRadius: 10, padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Strategy Signal</div>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Backtested Signal (2018-2026)</div>
           <div style={{ fontSize: 24, fontWeight: 700, color: v2.dirColor, fontFamily: 'JetBrains Mono, monospace' }}>{v2.direction}</div>
         </div>
         <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
@@ -773,6 +779,40 @@ function V2StrategyTab({ data, allocation }) {
         </div>
       </div>
 
+      {/* Backtest Performance Summary */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 12 }}>Backtest Performance (Feb 2018 - Mar 2026)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10 }}>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.green }}>+124.8%</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Total Return</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.text }}>11</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Trades</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.green }}>63.6%</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Win Rate</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.accent }}>0.666</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Sharpe Ratio</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.green }}>+11.4%</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Avg Return</div>
+          </div>
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: COLORS.red }}>-30.6%</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>Worst Trade</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 8, textAlign: 'center' }}>
+          Strategy: Enter when Raw F&G &lt; 15 (Extreme Fear) | Exit when Raw F&G &gt; 50 (Neutral recovery) | Best Sharpe across 22 variants tested
+        </div>
+      </div>
+
       {/* Fear & Greed Chart */}
       <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Fear & Greed Index (90d) with 14d SMA & BTC Price</div>
@@ -784,8 +824,8 @@ function V2StrategyTab({ data, allocation }) {
             <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fill: COLORS.textMuted, fontSize: 10 }} tickFormatter={function (v) { return '$' + fmt(v); }} />
             <Tooltip content={<ChartTooltipContent />} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
-            <ReferenceLine yAxisId="left" y={25} stroke={COLORS.red} strokeDasharray="4 4" label={{ value: 'Extreme Fear', fill: COLORS.red, fontSize: 10, position: 'insideTopLeft' }} />
-            <ReferenceLine yAxisId="left" y={75} stroke={COLORS.blue} strokeDasharray="4 4" label={{ value: 'Extreme Greed', fill: COLORS.blue, fontSize: 10, position: 'insideBottomLeft' }} />
+            <ReferenceLine yAxisId="left" y={15} stroke={COLORS.red} strokeDasharray="4 4" label={{ value: 'Entry <15', fill: COLORS.red, fontSize: 10, position: 'insideTopLeft' }} />
+            <ReferenceLine yAxisId="left" y={50} stroke={COLORS.green} strokeDasharray="4 4" label={{ value: 'Exit >50', fill: COLORS.green, fontSize: 10, position: 'insideBottomLeft' }} />
             <Area yAxisId="left" type="monotone" dataKey="fng" fill={COLORS.amber} fillOpacity={0.15} stroke={COLORS.amber} strokeWidth={1} dot={false} name="F&G Raw" />
             <Line yAxisId="left" type="monotone" dataKey="sma14" stroke={COLORS.accent} strokeWidth={2.5} dot={false} name="14d SMA" />
             <Line yAxisId="right" type="monotone" dataKey="price" stroke={COLORS.text} strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="BTC Price" connectNulls />
@@ -801,7 +841,7 @@ function V2StrategyTab({ data, allocation }) {
             <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>50%</span>
           </div>
           <ScoreBar score={v2.fngScore} label="" color={COLORS.accent} />
-          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>SMA14: {v2.fngSMA14} → Score: {v2.fngScore.toFixed(0)}</div>
+          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>Raw: {v2.fngRaw} | SMA14: {v2.fngSMA14}</div>
         </div>
         <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -809,7 +849,7 @@ function V2StrategyTab({ data, allocation }) {
             <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>25%</span>
           </div>
           <ScoreBar score={v2.mpDistScore} label="" color={COLORS.blue} />
-          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>Price {data.maxPainCurrent && data.currentPrice < data.maxPainCurrent ? 'below' : 'above'} max pain</div>
+          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>Price {data.maxPainCurrent && data.currentPrice < data.maxPainCurrent ? 'below' : 'above'} max pain ({fmtPct(data.maxPainDistance)})</div>
         </div>
         <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -824,60 +864,56 @@ function V2StrategyTab({ data, allocation }) {
       {/* V1 vs V2 Comparison */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
         <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, textAlign: 'center' }}>
-          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V1 Composite (Multi-Signal)</div>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V1 Multi-Signal Allocation</div>
           <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: allocation.regime.color }}>{allocation.composite.toFixed(0)}</div>
-          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{allocation.regime.label} — BTC {allocation.btcPct}%</div>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{allocation.regime.label} | BTC {allocation.btcPct}%</div>
         </div>
         <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, textAlign: 'center' }}>
-          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Fear & Greed Strategy</div>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Fear & Greed (Backtested)</div>
           <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: v2.dirColor }}>{v2.composite.toFixed(0)}</div>
           <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{v2.direction}</div>
         </div>
       </div>
 
-      {/* Zone Crossings */}
-      {crossings.length > 0 && (
-        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Signal History (14d SMA Zone Crossings)</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid ' + COLORS.border }}>
-                  {['Date', 'Event', 'SMA', 'BTC Price'].map(function (h) {
-                    return <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: COLORS.textMuted, fontWeight: 500 }}>{h}</th>;
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {crossings.slice().reverse().map(function (c, i) {
-                  var isExtremeFear = c.type.indexOf('FEAR') >= 0;
-                  return (
-                    <tr key={i} style={{ borderBottom: '1px solid ' + COLORS.borderSubtle }}>
-                      <td style={{ padding: '6px 12px', color: COLORS.textSecondary }}>{c.date}</td>
-                      <td style={{ padding: '6px 12px' }}>
-                        <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: isExtremeFear ? 'rgba(220,38,38,0.12)' : 'rgba(37,99,235,0.12)', color: isExtremeFear ? COLORS.red : COLORS.blue }}>
-                          {c.type}
-                        </span>
-                      </td>
-                      <td style={{ padding: '6px 12px', color: COLORS.text }}>{c.sma}</td>
-                      <td style={{ padding: '6px 12px', color: COLORS.text }}>{c.price ? fmtUSD(c.price) : '—'}</td>
-                    </tr>
-                  );
+      {/* Backtest Trade History */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Backtest Trade History (11 trades, 2018-2026)</div>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid ' + COLORS.border }}>
+                {['Entry', 'Exit', 'Entry Price', 'Exit Price', 'Return', 'Days'].map(function (h) {
+                  return <th key={h} style={{ padding: '8px 10px', textAlign: 'left', color: COLORS.textMuted, fontWeight: 500 }}>{h}</th>;
                 })}
-              </tbody>
-            </table>
-          </div>
+              </tr>
+            </thead>
+            <tbody>
+              {backtestTrades.map(function (t, i) {
+                return (
+                  <tr key={i} style={{ borderBottom: '1px solid ' + COLORS.borderSubtle }}>
+                    <td style={{ padding: '6px 10px', color: COLORS.textSecondary }}>{t.entry}</td>
+                    <td style={{ padding: '6px 10px', color: COLORS.textSecondary }}>{t.exit}</td>
+                    <td style={{ padding: '6px 10px', color: COLORS.text }}>{fmtUSD(t.entryPx)}</td>
+                    <td style={{ padding: '6px 10px', color: COLORS.text }}>{fmtUSD(t.exitPx)}</td>
+                    <td style={{ padding: '6px 10px', color: pctColor(t.ret), fontWeight: 600 }}>{fmtPct(t.ret)}</td>
+                    <td style={{ padding: '6px 10px', color: COLORS.textSecondary }}>{t.days}d</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
 
       {/* Methodology */}
       <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>V2 Methodology</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>V2 Methodology (Backtested)</div>
         <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6 }}>
-          <p style={{ marginBottom: 8 }}>V2 is a contrarian strategy built around the Fear & Greed Index 14-day SMA. When the market enters Extreme Fear (&lt;25), historically this has preceded significant BTC rallies — capitulation marks opportunity.</p>
-          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.accent }}>Fear & Greed 14d SMA (50%)</strong>: Inverted scoring — lower F&G = higher bullish score. The 14d SMA smooths daily noise while preserving trend direction. Extreme Fear (&lt;25) maps to scores 76-100.</p>
-          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.blue }}>Max Pain Distance (25%)</strong>: When price is significantly below Max Pain, options market makers have incentive to push price toward max pain — reinforcing the contrarian buy thesis.</p>
-          <p><strong style={{ color: COLORS.purple }}>Price Momentum 30d (25%)</strong>: Confirms whether fear is justified by sustained decline (capitulation) or just a short-term dip. Deep 30d drawdowns with extreme fear create the strongest buy signals.</p>
+          <p style={{ marginBottom: 8 }}>V2 is a contrarian entry-timing strategy built on the Fear & Greed Index. Backtested across 22 strategy variants (entry thresholds, exit modes, trailing stops, circuit breakers, regime filters) over 8 years of data. The simplest approach won.</p>
+          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.green }}>Entry</strong>: Raw Fear & Greed &lt; 15 (Extreme Fear). This threshold produced the best Sharpe ratio (0.666) across all variants. Tighter stops and circuit breakers *reduced* performance by crystallizing temporary drawdowns during volatile fear zones.</p>
+          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.red }}>Exit</strong>: Raw Fear & Greed &gt; 50 (sentiment recovery to neutral). Hold through the volatility — fear zones are inherently choppy, and premature exits destroy the contrarian edge.</p>
+          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.accent }}>Key insight</strong>: Adding protective stops (trailing, circuit breakers) consistently degraded returns. When F&G hits extreme fear, the correct action is to *hold through the noise* and wait for sentiment normalization. The 2020 COVID crash entry (+99.5%) would have been stopped out early by any trailing mechanism.</p>
+          <p><strong style={{ color: COLORS.textSecondary }}>Composite score</strong>: F&G inverted (50%) + Max Pain distance (25%) + 30d momentum (25%). The composite provides conviction weighting — strongest signals when extreme fear coincides with price below max pain and deep drawdowns.</p>
         </div>
       </div>
     </div>
