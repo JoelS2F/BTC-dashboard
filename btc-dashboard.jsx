@@ -22,7 +22,6 @@ const TABS = [
   { id: 'options', label: 'Options Structure' },
   { id: 'onchain', label: 'On-Chain' },
   { id: 'derivatives', label: 'Derivatives' },
-  { id: 'allocation', label: 'Allocation' },
 ];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -315,9 +314,16 @@ function ChartTooltipContent({ payload, label }) {
   );
 }
 
-// ─── TAB: OVERVIEW ────────────────────────────────────────────────────────────
+// ─── TAB: OVERVIEW (includes Allocation) ──────────────────────────────────────
 function OverviewTab({ data, mpSignal, allocation }) {
   var chartData = mpSignal.merged.length > 0 ? mpSignal.merged.slice(-90) : data.priceHistory.slice(-90);
+
+  var signalCards = [
+    { label: 'Max Pain Signal', weight: '30%', score: allocation.scores.maxPain, color: COLORS.accent, desc: mpSignal.currentSignal + ' (' + mpSignal.daysInSignal + 'd)' },
+    { label: 'On-Chain Health', weight: '25%', score: allocation.scores.onChain, color: COLORS.blue, desc: data.glassnode ? 'Live Glassnode data' : 'No data (mock)' },
+    { label: 'Derivatives Sentiment', weight: '25%', score: allocation.scores.derivatives, color: COLORS.purple, desc: data.derivatives.perpFunding != null ? 'Funding: ' + (data.derivatives.perpFunding * 100).toFixed(4) + '%' : 'Limited data' },
+    { label: 'Price Momentum', weight: '20%', score: allocation.scores.momentum, color: COLORS.greenLight, desc: '7d: ' + fmtPct(data.marketData.change7d) },
+  ];
 
   return (
     <div>
@@ -336,12 +342,10 @@ function OverviewTab({ data, mpSignal, allocation }) {
         <MetricCard label="24h Volume" value={'$' + fmt(data.marketData.volume24h)} />
         <MetricCard label="Max Pain" value={data.maxPainCurrent ? fmtUSD(data.maxPainCurrent) : '—'} sub={data.maxPainCurrent ? fmtPct(data.maxPainDistance) + ' from price' : 'Loading...'} />
         <MetricCard label="Signal" value={<SignalBadge signal={mpSignal.currentSignal} />} sub={mpSignal.daysInSignal > 0 ? mpSignal.daysInSignal + 'd held' : ''} />
-        <MetricCard label="Composite" value={allocation.composite.toFixed(0)} color={allocation.regime.color} sub={allocation.regime.label} />
-        <MetricCard label="BTC Allocation" value={allocation.btcPct + '%'} color={COLORS.accent} sub={allocation.stablesPct + '% stables'} />
       </div>
 
-      {/* Mini Chart */}
-      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16 }}>
+      {/* Price Chart */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>90-Day BTC Price vs Max Pain 30D MA</div>
         <ResponsiveContainer width="100%" height={300}>
           <ComposedChart data={chartData} margin={chartMargin}>
@@ -359,6 +363,58 @@ function OverviewTab({ data, mpSignal, allocation }) {
             Warming up: {mpSignal.historyDays}/30 days of Max Pain history collected
           </div>
         )}
+      </div>
+
+      {/* Regime Banner + Allocation */}
+      <div style={{ background: allocation.regime.bg, border: '1px solid ' + allocation.regime.color + '33', borderRadius: 10, padding: '16px 20px', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: allocation.regime.color }}>{allocation.regime.label}</div>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary, marginTop: 2 }}>{allocation.regime.desc}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: allocation.regime.color }}>{allocation.composite.toFixed(0)}</div>
+          <div style={{ fontSize: 11, color: COLORS.textMuted }}>/ 100</div>
+        </div>
+      </div>
+
+      {/* Circuit Breaker */}
+      {allocation.circuitBreaker.active && (
+        <div style={{ background: 'rgba(220,38,38,0.1)', border: '1px solid rgba(220,38,38,0.3)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.red }}>CIRCUIT BREAKER: {allocation.circuitBreaker.level}</div>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{allocation.circuitBreaker.reasons.join(', ')} — BTC capped at {allocation.btcPct}%</div>
+        </div>
+      )}
+
+      {/* Signal Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
+        {signalCards.map(function (s) {
+          return (
+            <div key={s.label} style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>{s.label}</span>
+                <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>{s.weight}</span>
+              </div>
+              <ScoreBar score={s.score} label="" color={s.color} />
+              <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>{s.desc}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Allocation Bar */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 12 }}>Recommended Allocation</div>
+        <div style={{ display: 'flex', height: 40, borderRadius: 8, overflow: 'hidden', marginBottom: 8 }}>
+          <div style={{ width: allocation.btcPct + '%', background: COLORS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, fontFamily: 'JetBrains Mono, monospace', color: '#fff', transition: 'width 0.5s' }}>
+            {allocation.btcPct > 10 ? 'BTC ' + allocation.btcPct + '%' : ''}
+          </div>
+          <div style={{ width: allocation.stablesPct + '%', background: COLORS.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 14, fontFamily: 'JetBrains Mono, monospace', color: COLORS.textSecondary, transition: 'width 0.5s' }}>
+            {allocation.stablesPct > 10 ? 'Stables ' + allocation.stablesPct + '%' : ''}
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: COLORS.textMuted }}>
+          Formula: BTC% = clamp(40 + (composite - 50) * 1.6, 0, 100). Center: 40% BTC at neutral composite.
+        </div>
       </div>
     </div>
   );
@@ -613,83 +669,6 @@ function DerivativesTab({ data }) {
   );
 }
 
-// ─── TAB: ALLOCATION ──────────────────────────────────────────────────────────
-function AllocationTab({ data, mpSignal, allocation }) {
-  var signalCards = [
-    { label: 'Max Pain Signal', weight: '30%', score: allocation.scores.maxPain, color: COLORS.accent, desc: mpSignal.currentSignal + ' (' + mpSignal.daysInSignal + 'd)' },
-    { label: 'On-Chain Health', weight: '25%', score: allocation.scores.onChain, color: COLORS.blue, desc: data.glassnode ? 'Live Glassnode data' : 'No data (mock)' },
-    { label: 'Derivatives Sentiment', weight: '25%', score: allocation.scores.derivatives, color: COLORS.purple, desc: data.derivatives.perpFunding != null ? 'Funding: ' + (data.derivatives.perpFunding * 100).toFixed(4) + '%' : 'Limited data' },
-    { label: 'Price Momentum', weight: '20%', score: allocation.scores.momentum, color: COLORS.greenLight, desc: '7d: ' + fmtPct(data.marketData.change7d) },
-  ];
-
-  return (
-    <div>
-      {/* Regime Banner */}
-      <div style={{ background: allocation.regime.bg, border: '1px solid ' + allocation.regime.color + '33', borderRadius: 10, padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: allocation.regime.color }}>{allocation.regime.label}</div>
-          <div style={{ fontSize: 12, color: COLORS.textSecondary, marginTop: 2 }}>{allocation.regime.desc}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 32, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: allocation.regime.color }}>{allocation.composite.toFixed(0)}</div>
-          <div style={{ fontSize: 11, color: COLORS.textMuted }}>/ 100</div>
-        </div>
-      </div>
-
-      {/* Circuit Breaker */}
-      {allocation.circuitBreaker.active && (
-        <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 8, padding: 12, marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.red }}>CIRCUIT BREAKER: {allocation.circuitBreaker.level}</div>
-          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{allocation.circuitBreaker.reasons.join(', ')} — BTC capped at {allocation.btcPct}%</div>
-        </div>
-      )}
-
-      {/* Signal Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 20 }}>
-        {signalCards.map(function (s) {
-          return (
-            <div key={s.label} style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>{s.label}</span>
-                <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>{s.weight}</span>
-              </div>
-              <ScoreBar score={s.score} label="" color={s.color} />
-              <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>{s.desc}</div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Allocation Bar */}
-      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 12 }}>Recommended Allocation</div>
-        <div style={{ display: 'flex', height: 40, borderRadius: 8, overflow: 'hidden', marginBottom: 8 }}>
-          <div style={{ width: allocation.btcPct + '%', background: COLORS.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, fontFamily: 'JetBrains Mono, monospace', color: '#fff', transition: 'width 0.5s' }}>
-            {allocation.btcPct > 10 ? 'BTC ' + allocation.btcPct + '%' : ''}
-          </div>
-          <div style={{ width: allocation.stablesPct + '%', background: COLORS.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 14, fontFamily: 'JetBrains Mono, monospace', color: COLORS.textSecondary, transition: 'width 0.5s' }}>
-            {allocation.stablesPct > 10 ? 'Stables ' + allocation.stablesPct + '%' : ''}
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: COLORS.textMuted }}>
-          Formula: BTC% = clamp(40 + (composite - 50) * 1.6, 0, 100). Center: 40% BTC at neutral composite.
-        </div>
-      </div>
-
-      {/* Methodology */}
-      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Methodology</div>
-        <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6 }}>
-          <p style={{ marginBottom: 8 }}>Four signal categories combine into a composite score (0-100). Each signal is independently scored on a 0-100 scale where 50 is neutral.</p>
-          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.accent }}>Max Pain Signal (30%)</strong>: 30D moving average crossover of BTC price vs options max pain. When price crosses above the 30D MA of max pain, the signal turns LONG. Distance from the MA amplifies conviction.</p>
-          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.blue }}>On-Chain Health (25%)</strong>: Glassnode metrics — exchange net flows (accumulation/distribution), SOPR (profit-taking), NUPL (cycle position), MVRV (valuation), active addresses (network health).</p>
-          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.purple }}>Derivatives Sentiment (25%)</strong>: Perpetual funding rates (leverage imbalance), put/call ratio (hedging demand), OI/market-cap ratio (speculative excess).</p>
-          <p><strong style={{ color: COLORS.greenLight }}>Price Momentum (20%)</strong>: 7-day (60%) and 30-day (40%) price returns, providing trend context to the structural signals above.</p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── SETTINGS MODAL ───────────────────────────────────────────────────────────
 function SettingsModal({ onClose }) {
@@ -765,7 +744,6 @@ export default function BTCDashboard() {
       case 'options': return <OptionsTab data={data} />;
       case 'onchain': return <OnChainTab data={data} />;
       case 'derivatives': return <DerivativesTab data={data} />;
-      case 'allocation': return <AllocationTab data={data} mpSignal={mpSignal} allocation={allocation} />;
       default: return null;
     }
   }
