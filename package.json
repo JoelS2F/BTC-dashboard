@@ -1,0 +1,14 @@
+{
+  "name": "btc-dashboard",
+  "version": "1.0.0",
+  "description": "Bitcoin Max Pain Intelligence Dashboard with multi-signal allocation",
+  "scripts": {
+    "build": "npx esbuild entry.jsx --bundle --outfile=bundle.js --jsx=automatic --format=iife --target=es2020 --minify"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.0"
+  }
+}
