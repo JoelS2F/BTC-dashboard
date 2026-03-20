@@ -25,6 +25,7 @@
     COINGLASS_LIQ: "btc_cache_coinglass_liq",
     COINGLASS_LS: "btc_cache_coinglass_ls",
     GN_DATA: "btc_cache_glassnode",
+    FNG: "btc_cache_fng",
     MAX_PAIN_HISTORY: "btc_maxpain_history",
   };
 
@@ -40,15 +41,17 @@
     deribitPerp: null,
     coinglassData: { funding: null, oi: null, liquidations: null, longShort: null },
     glassnodeData: null,
+    fngData: null,
     maxPainHistory: [],
     sources: {
       coingecko: { status: "pending", stale: false },
       deribit: { status: "pending", stale: false },
       coinglass: { status: "pending", stale: false },
       glassnode: { status: "pending", stale: false },
+      fng: { status: "pending", stale: false },
     },
     config: { coinglassKey: null, coingeckoKey: null },
-    freshness: { coingecko: null, deribit: null, coinglass: null, glassnode: null },
+    freshness: { coingecko: null, deribit: null, coinglass: null, glassnode: null, fng: null },
     refreshTimer: null,
     listeners: [],
   };
@@ -361,6 +364,43 @@
     return [];
   }
 
+  // ─── FEAR & GREED INDEX ──────────────────────────────────────────────────────
+  async function fetchFearGreed() {
+    var cached = getCached(CACHE_KEYS.FNG);
+    if (cached) { state.fngData = cached; state.sources.fng.status = "live"; state.freshness.fng = Date.now(); return; }
+    try {
+      var url = "https://api.alternative.me/fng/?limit=90&format=json";
+      var res = await fetch(url);
+      if (!res.ok) throw new Error("FNG " + res.status);
+      var data = await res.json();
+      state.fngData = data;
+      setCache(CACHE_KEYS.FNG, data);
+      state.sources.fng.status = "live";
+      state.freshness.fng = Date.now();
+    } catch (e) {
+      console.warn("[BTC Engine] Fear & Greed error:", e.message);
+      var stale = getStaleFallback(CACHE_KEYS.FNG);
+      if (stale) { state.fngData = stale; state.sources.fng.stale = true; state.sources.fng.status = "stale"; }
+      else state.sources.fng.status = "error";
+    }
+  }
+
+  function transformFNG(raw) {
+    if (!raw || !raw.data || raw.data.length === 0) return null;
+    // Sort oldest → newest
+    var sorted = raw.data.slice().sort(function (a, b) { return parseInt(a.timestamp) - parseInt(b.timestamp); });
+    var history = sorted.map(function (d) {
+      return { date: new Date(parseInt(d.timestamp) * 1000).toISOString().slice(0, 10), value: parseInt(d.value), classification: d.value_classification };
+    });
+    // Compute 14d SMA
+    for (var i = 0; i < history.length; i++) {
+      var windowSlice = history.slice(Math.max(0, i - 13), i + 1);
+      history[i].sma14 = Math.round(windowSlice.reduce(function (s, d) { return s + d.value; }, 0) / windowSlice.length);
+    }
+    var latest = history[history.length - 1];
+    return { history: history, current: latest };
+  }
+
   // ─── AGGREGATE getData() ────────────────────────────────────────────────────
   function getData() {
     var price = 0;
@@ -404,6 +444,7 @@
       options: optionsData,
       ivTermStructure: ivTermStructure,
       glassnode: state.glassnodeData,
+      fng: transformFNG(state.fngData),
       derivatives: {
         funding: state.coinglassData.funding,
         oi: state.coinglassData.oi,
@@ -419,6 +460,7 @@
         deribit: state.sources.deribit.status !== "live",
         coinglass: state.sources.coinglass.status !== "live",
         glassnode: state.sources.glassnode.status !== "live",
+        fng: state.sources.fng.status !== "live",
       },
       _sources: state.sources,
     };
@@ -448,6 +490,7 @@
       fetchDeribitPerp(),
       fetchAllCoinGlass(),
       fetchGlassnodeData(),
+      fetchFearGreed(),
     ]);
     state.isLoading = false;
     state.lastUpdate = Date.now();

@@ -22,6 +22,7 @@ const TABS = [
   { id: 'options', label: 'Options Structure' },
   { id: 'onchain', label: 'On-Chain' },
   { id: 'derivatives', label: 'Derivatives' },
+  { id: 'v2strategy', label: 'V2 Strategy' },
 ];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -342,6 +343,7 @@ function OverviewTab({ data, mpSignal, allocation }) {
         <MetricCard label="24h Volume" value={'$' + fmt(data.marketData.volume24h)} />
         <MetricCard label="Max Pain" value={data.maxPainCurrent ? fmtUSD(data.maxPainCurrent) : '—'} sub={data.maxPainCurrent ? fmtPct(data.maxPainDistance) + ' from price' : 'Loading...'} />
         <MetricCard label="Signal" value={<SignalBadge signal={mpSignal.currentSignal} />} sub={mpSignal.daysInSignal > 0 ? mpSignal.daysInSignal + 'd held' : ''} />
+        <MetricCard label="Fear & Greed" value={data.fng ? data.fng.current.value : '—'} color={data.fng ? (data.fng.current.value <= 24 ? COLORS.red : data.fng.current.value <= 44 ? COLORS.amber : data.fng.current.value <= 55 ? COLORS.textSecondary : data.fng.current.value <= 75 ? COLORS.green : COLORS.blue) : COLORS.textMuted} sub={data.fng ? data.fng.current.classification : 'Loading...'} />
       </div>
 
       {/* Price Chart */}
@@ -670,6 +672,218 @@ function DerivativesTab({ data }) {
 }
 
 
+// ─── TAB: V2 STRATEGY (Fear & Greed) ──────────────────────────────────────────
+function computeV2Signal(data) {
+  var fng = data.fng;
+  var fngSMA14 = fng && fng.current ? fng.current.sma14 : 50;
+  var fngScore = clamp(100 - fngSMA14, 0, 100); // invert: fear = bullish
+
+  var price = data.currentPrice || 0;
+  var maxPain = data.maxPainCurrent || price;
+  var mpDistScore = 50;
+  if (maxPain && price) {
+    mpDistScore = price < maxPain
+      ? clamp(50 + (maxPain - price) / maxPain * 200, 50, 100)
+      : clamp(50 - (price - maxPain) / maxPain * 200, 0, 50);
+  }
+
+  var momScore = clamp(50 + (data.marketData.change30d || 0) * 0.8, 10, 90);
+
+  var composite = fngScore * 0.50 + mpDistScore * 0.25 + momScore * 0.25;
+
+  var direction = 'HOLD';
+  var dirColor = COLORS.amber;
+  if (fngSMA14 <= 24) { direction = 'STRONG BUY'; dirColor = COLORS.green; }
+  else if (fngSMA14 <= 44) { direction = 'BUY'; dirColor = COLORS.greenLight; }
+  else if (fngSMA14 >= 76) { direction = 'STRONG SELL'; dirColor = COLORS.red; }
+  else if (fngSMA14 >= 56) { direction = 'SELL'; dirColor = COLORS.redLight; }
+
+  return { fngScore, mpDistScore, momScore, composite, direction, dirColor, fngSMA14 };
+}
+
+function V2StrategyTab({ data, allocation }) {
+  var fng = data.fng;
+  var v2 = computeV2Signal(data);
+
+  // Build chart data: merge FNG history with price history
+  var chartData = [];
+  if (fng && fng.history) {
+    var priceMap = {};
+    if (data.priceHistory) data.priceHistory.forEach(function (p) { priceMap[p.date] = p.price; });
+    chartData = fng.history.map(function (d) {
+      return { date: d.date, fng: d.value, sma14: d.sma14, price: priceMap[d.date] || null };
+    });
+  }
+
+  // Find zone crossings (SMA14 crossing below 25 or above 75)
+  var crossings = [];
+  if (fng && fng.history.length > 1) {
+    var priceMap2 = {};
+    if (data.priceHistory) data.priceHistory.forEach(function (p) { priceMap2[p.date] = p.price; });
+    for (var i = 1; i < fng.history.length; i++) {
+      var prev = fng.history[i - 1].sma14;
+      var curr = fng.history[i].sma14;
+      if (prev >= 25 && curr < 25) crossings.push({ date: fng.history[i].date, type: 'EXTREME FEAR ENTRY', sma: curr, price: priceMap2[fng.history[i].date] || null });
+      if (prev < 25 && curr >= 25) crossings.push({ date: fng.history[i].date, type: 'EXTREME FEAR EXIT', sma: curr, price: priceMap2[fng.history[i].date] || null });
+      if (prev <= 75 && curr > 75) crossings.push({ date: fng.history[i].date, type: 'EXTREME GREED ENTRY', sma: curr, price: priceMap2[fng.history[i].date] || null });
+      if (prev > 75 && curr <= 75) crossings.push({ date: fng.history[i].date, type: 'EXTREME GREED EXIT', sma: curr, price: priceMap2[fng.history[i].date] || null });
+    }
+  }
+
+  // FNG zone color helper
+  function fngZoneColor(v) {
+    if (v <= 24) return COLORS.red;
+    if (v <= 44) return COLORS.amber;
+    if (v <= 55) return COLORS.textSecondary;
+    if (v <= 75) return COLORS.green;
+    return COLORS.blue;
+  }
+
+  if (!fng) return (
+    <div style={{ color: COLORS.textMuted, padding: 40, textAlign: 'center' }}>
+      <div style={{ fontSize: 16, marginBottom: 8 }}>Loading Fear & Greed data...</div>
+      <div style={{ fontSize: 12 }}>The Alternative.me API may be loading.</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* V2 Signal Banner */}
+      <div style={{ background: v2.dirColor + '18', border: '1px solid ' + v2.dirColor + '44', borderRadius: 10, padding: '16px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Strategy Signal</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: v2.dirColor, fontFamily: 'JetBrains Mono, monospace' }}>{v2.direction}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: fngZoneColor(fng.current.value) }}>{fng.current.value}</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>F&G Raw</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: fngZoneColor(fng.current.sma14) }}>{fng.current.sma14}</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>14d SMA</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: v2.dirColor }}>{v2.composite.toFixed(0)}</div>
+            <div style={{ fontSize: 10, color: COLORS.textMuted }}>V2 Score</div>
+          </div>
+        </div>
+        <div style={{ padding: '4px 12px', borderRadius: 8, background: fngZoneColor(fng.current.value) + '22', color: fngZoneColor(fng.current.value), fontSize: 13, fontWeight: 600 }}>
+          {fng.current.classification}
+        </div>
+      </div>
+
+      {/* Fear & Greed Chart */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Fear & Greed Index (90d) with 14d SMA & BTC Price</div>
+        <ResponsiveContainer width="100%" height={350}>
+          <ComposedChart data={chartData} margin={chartMargin}>
+            <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+            <XAxis dataKey="date" tick={{ fill: COLORS.textMuted, fontSize: 10 }} tickFormatter={function (d) { return d.slice(5); }} interval={Math.floor(chartData.length / 8)} />
+            <YAxis yAxisId="left" domain={[0, 100]} tick={{ fill: COLORS.textMuted, fontSize: 10 }} />
+            <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fill: COLORS.textMuted, fontSize: 10 }} tickFormatter={function (v) { return '$' + fmt(v); }} />
+            <Tooltip content={<ChartTooltipContent />} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <ReferenceLine yAxisId="left" y={25} stroke={COLORS.red} strokeDasharray="4 4" label={{ value: 'Extreme Fear', fill: COLORS.red, fontSize: 10, position: 'insideTopLeft' }} />
+            <ReferenceLine yAxisId="left" y={75} stroke={COLORS.blue} strokeDasharray="4 4" label={{ value: 'Extreme Greed', fill: COLORS.blue, fontSize: 10, position: 'insideBottomLeft' }} />
+            <Area yAxisId="left" type="monotone" dataKey="fng" fill={COLORS.amber} fillOpacity={0.15} stroke={COLORS.amber} strokeWidth={1} dot={false} name="F&G Raw" />
+            <Line yAxisId="left" type="monotone" dataKey="sma14" stroke={COLORS.accent} strokeWidth={2.5} dot={false} name="14d SMA" />
+            <Line yAxisId="right" type="monotone" dataKey="price" stroke={COLORS.text} strokeWidth={1.5} strokeDasharray="4 2" dot={false} name="BTC Price" connectNulls />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* V2 Composite Breakdown */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 20 }}>
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>Fear & Greed (inverted)</span>
+            <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>50%</span>
+          </div>
+          <ScoreBar score={v2.fngScore} label="" color={COLORS.accent} />
+          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>SMA14: {v2.fngSMA14} → Score: {v2.fngScore.toFixed(0)}</div>
+        </div>
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>Max Pain Distance</span>
+            <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>25%</span>
+          </div>
+          <ScoreBar score={v2.mpDistScore} label="" color={COLORS.blue} />
+          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>Price {data.maxPainCurrent && data.currentPrice < data.maxPainCurrent ? 'below' : 'above'} max pain</div>
+        </div>
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: COLORS.text }}>Price Momentum (30d)</span>
+            <span style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: 'JetBrains Mono, monospace' }}>25%</span>
+          </div>
+          <ScoreBar score={v2.momScore} label="" color={COLORS.purple} />
+          <div style={{ fontSize: 11, color: COLORS.textSecondary, marginTop: 4 }}>30d: {fmtPct(data.marketData.change30d)}</div>
+        </div>
+      </div>
+
+      {/* V1 vs V2 Comparison */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, textAlign: 'center' }}>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V1 Composite (Multi-Signal)</div>
+          <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: allocation.regime.color }}>{allocation.composite.toFixed(0)}</div>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{allocation.regime.label} — BTC {allocation.btcPct}%</div>
+        </div>
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, textAlign: 'center' }}>
+          <div style={{ fontSize: 11, color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>V2 Fear & Greed Strategy</div>
+          <div style={{ fontSize: 28, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', color: v2.dirColor }}>{v2.composite.toFixed(0)}</div>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>{v2.direction}</div>
+        </div>
+      </div>
+
+      {/* Zone Crossings */}
+      {crossings.length > 0 && (
+        <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>Signal History (14d SMA Zone Crossings)</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'JetBrains Mono, monospace' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid ' + COLORS.border }}>
+                  {['Date', 'Event', 'SMA', 'BTC Price'].map(function (h) {
+                    return <th key={h} style={{ padding: '8px 12px', textAlign: 'left', color: COLORS.textMuted, fontWeight: 500 }}>{h}</th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {crossings.slice().reverse().map(function (c, i) {
+                  var isExtremeFear = c.type.indexOf('FEAR') >= 0;
+                  return (
+                    <tr key={i} style={{ borderBottom: '1px solid ' + COLORS.borderSubtle }}>
+                      <td style={{ padding: '6px 12px', color: COLORS.textSecondary }}>{c.date}</td>
+                      <td style={{ padding: '6px 12px' }}>
+                        <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: isExtremeFear ? 'rgba(220,38,38,0.12)' : 'rgba(37,99,235,0.12)', color: isExtremeFear ? COLORS.red : COLORS.blue }}>
+                          {c.type}
+                        </span>
+                      </td>
+                      <td style={{ padding: '6px 12px', color: COLORS.text }}>{c.sma}</td>
+                      <td style={{ padding: '6px 12px', color: COLORS.text }}>{c.price ? fmtUSD(c.price) : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Methodology */}
+      <div style={{ background: COLORS.card, border: '1px solid ' + COLORS.border, borderRadius: 8, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 8 }}>V2 Methodology</div>
+        <div style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 1.6 }}>
+          <p style={{ marginBottom: 8 }}>V2 is a contrarian strategy built around the Fear & Greed Index 14-day SMA. When the market enters Extreme Fear (&lt;25), historically this has preceded significant BTC rallies — capitulation marks opportunity.</p>
+          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.accent }}>Fear & Greed 14d SMA (50%)</strong>: Inverted scoring — lower F&G = higher bullish score. The 14d SMA smooths daily noise while preserving trend direction. Extreme Fear (&lt;25) maps to scores 76-100.</p>
+          <p style={{ marginBottom: 8 }}><strong style={{ color: COLORS.blue }}>Max Pain Distance (25%)</strong>: When price is significantly below Max Pain, options market makers have incentive to push price toward max pain — reinforcing the contrarian buy thesis.</p>
+          <p><strong style={{ color: COLORS.purple }}>Price Momentum 30d (25%)</strong>: Confirms whether fear is justified by sustained decline (capitulation) or just a short-term dip. Deep 30d drawdowns with extreme fear create the strongest buy signals.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── SETTINGS MODAL ───────────────────────────────────────────────────────────
 function SettingsModal({ onClose }) {
   var [cgKey, setCgKey] = useState('');
@@ -744,6 +958,7 @@ export default function BTCDashboard() {
       case 'options': return <OptionsTab data={data} />;
       case 'onchain': return <OnChainTab data={data} />;
       case 'derivatives': return <DerivativesTab data={data} />;
+      case 'v2strategy': return <V2StrategyTab data={data} allocation={allocation} />;
       default: return null;
     }
   }
@@ -770,6 +985,7 @@ export default function BTCDashboard() {
               <SourceBadge label="CoinGecko" isMock={data._isMock.coingecko} />
               <SourceBadge label="Deribit" isMock={data._isMock.deribit} />
               <SourceBadge label="Glassnode" isMock={data._isMock.glassnode} />
+              <SourceBadge label="F&G" isMock={data._isMock.fng} />
             </div>
           )}
           <button onClick={function () { if (window.BTCDataEngine) window.BTCDataEngine.refresh(); }} style={{ padding: '4px 10px', borderRadius: 6, border: '1px solid ' + COLORS.border, background: 'transparent', color: COLORS.textSecondary, cursor: 'pointer', fontSize: 11 }} title="Refresh all data">
